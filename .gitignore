@@ -1,1 +1,19 @@
 model-output/
+# Docker images exportades
+*.tar
+
+# Models generats durant l'entrenament
+models/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Entorns virtuals
+.venv/
+venv/
+env/
+
+# Fitxers de sistema/editor
+.DS_Store
+*.swp

@@ -10,4 +10,4 @@ COPY main-server.py .
 
 EXPOSE 8000
 
-CMD ["flask", “--app”, "main-server.py", “run”, “--host=0.0.0.0”, “--port=8000”]
+CMD ["flask", "--app", "main-server.py", "run", "--host=0.0.0.0", "--port=8000"]

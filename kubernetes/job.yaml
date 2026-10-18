@@ -9,7 +9,7 @@ spec:
     spec:
       containers:
         - name: model-train
-          image: model-train:default
+          image: model-train:v2
           imagePullPolicy: IfNotPresent
 
           env:

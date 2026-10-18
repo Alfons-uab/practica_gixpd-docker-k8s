@@ -6,6 +6,6 @@ COPY requirements-train.txt .
 
 RUN pip install --no-cache-dir -r requirements-train.txt
 
-COPY main-train.py .
+COPY main-train-v2.py .
 
-CMD ["python", "main-train.py"]
+CMD ["python", "main-train-v2.py"]

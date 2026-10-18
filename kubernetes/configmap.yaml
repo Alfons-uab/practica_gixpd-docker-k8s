@@ -5,5 +5,5 @@ metadata:
   name: model-config
 
 data:
-  MODEL_PATH: /models/model.npy
+  MODEL_PATH: /models/model-v2.npy
 

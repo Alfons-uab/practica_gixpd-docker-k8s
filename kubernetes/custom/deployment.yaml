@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: model-server-custom
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: model-server-custom
+
+  template:
+    metadata:
+      labels:
+        app: model-server-custom
+
+    spec:
+      containers:
+        - name: model-server-custom
+          image: model-server:custom
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - containerPort: 8000
+
+          env:
+            - name: MODEL_PATH
+              valueFrom:
+                configMapKeyRef:
+                  name: model-custom-config
+                  key: MODEL_PATH
+
+          volumeMounts:
+            - name: model-storage
+              mountPath: /models
+              readOnly: true
+
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "250m"
+
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 20
+
+      volumes:
+        - name: model-storage
+          persistentVolumeClaim:
+            claimName: model-pvc

@@ -1,0 +1,43 @@
+apiVersion: batch/v1
+kind: Job
+
+metadata:
+  name: model-train-custom
+
+spec:
+  template:
+    spec:
+      containers:
+        - name: model-train-custom
+          image: model-train:custom
+          imagePullPolicy: IfNotPresent
+
+          env:
+            - name: MODEL_PATH
+              valueFrom:
+                configMapKeyRef:
+                  name: model-custom-config
+                  key: MODEL_PATH
+
+          volumeMounts:
+            - name: model-storage
+              mountPath: /models
+
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+
+      volumes:
+        - name: model-storage
+          persistentVolumeClaim:
+            claimName: model-pvc
+
+      restartPolicy: Never
+
+  backoffLimit: 1
+
+

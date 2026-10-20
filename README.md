@@ -1,43 +1,41 @@
-# GixPD Practice 2 — Model Training with Docker and Kubernetes
+# GixPD Practice 2 — Docker & Kubernetes ML Deployment
 
-This project contains the implementation of **GixPD Practice 2**, where a machine learning model is trained inside a Docker container and later served through a Flask API deployed with Kubernetes.
+Practice project for training and serving a machine learning model using **Docker** and **Kubernetes (Minikube)**.
 
-The project uses two Docker images:
+The application is divided into two main components:
 
-- `model-train:default`: trains the model and saves it to disk.
-- `model-server:default`: loads the trained model and exposes it through a Flask API.
+- `model-train`: trains the machine learning model and stores it on disk.
+- `model-server`: exposes the trained model through a Flask API.
 
-The Kubernetes deployment uses a `ConfigMap`, persistent storage, a training `Job`, a `Deployment` with 3 replicas, and a `Service`.
+The final Kubernetes deployment includes persistent storage, configuration through a ConfigMap, a training Job, a Deployment with 3 replicas and a Service.
 
 ---
 
 ## Architecture
 
 ```text
-                         ConfigMap
-                    MODEL_PATH=/models/model.npy
-                           |
-                 +---------+---------+
-                 |                   |
-                 v                   v
-          Job model-train      Deployment model-server
-                 |                   |
-                 |              +----+----+
-                 |              |    |    |
-                 |             Pod  Pod  Pod
-                 |              |    |    |
-                 v              +----+----+
-             model.npy               |
-                 |                   |
-                 +----> PVC <---------+
-                                      |
-                                   Service
-                                    :5000
-                                      |
-                                port-forward
-                                      |
-                              localhost:5000
+                    ConfigMap
+               MODEL_PATH=/models/model.npy
+                      |
+              +-------+-------+
+              |               |
+              v               v
+       Training Job       Deployment
+              |          (3 replicas)
+              |           /    |    \
+              v         Pod   Pod   Pod
+          model.npy       \    |    /
+              |                |
+              +---- PVC -------+
+                               |
+                            Service
+                               |
+                         port-forward
+                               |
+                        localhost:5000
 ```
+
+The training Job writes the model to persistent storage and the three server replicas read the same model from that volume.
 
 ---
 
@@ -46,204 +44,100 @@ The Kubernetes deployment uses a `ConfigMap`, persistent storage, a training `Jo
 ```text
 .
 ├── model-train/
-│   ├── Dockerfile
-│   ├── main-train.py
-│   └── requirements-train.txt
-│
 ├── model-server/
-│   ├── Dockerfile
-│   ├── main-server.py
-│   └── requirements-server.txt
-│
+├── model-train-v2/
+├── model-train-custom/
+├── model-server-custom/
 ├── kubernetes/
 │   ├── configmap.yaml
 │   ├── pvc.yaml
 │   ├── job.yaml
 │   ├── deployment.yaml
-│   └── service.yaml
-│
+│   ├── service.yaml
+│   └── custom/
 ├── .gitignore
 └── README.md
 ```
 
-Generated models and exported Docker images are not stored in Git.
+Generated models and exported Docker `.tar` files are ignored by Git.
 
 ---
 
-# 1. Dependencies
-
-The following tools are required:
+## Requirements
 
 - Docker
 - Minikube
-- kubectl, or Minikube's integrated kubectl
+- kubectl
 
-For this project we use Minikube's kubectl through the following alias:
+In our environment, `kubectl` is provided through Minikube:
 
 ```bash
 alias kubectl="minikube kubectl --"
 ```
 
-This alias can be stored permanently in `/home/adminp/.bashrc`.
+Because the OpenNebula VM has limited memory, Minikube was configured with:
+
+```bash
+minikube config set memory 2200
+```
 
 ---
 
-# 2. Docker
+# Docker
 
-## 2.1 Build the training image
-
-From the repository root:
+## Build the base images
 
 ```bash
-docker build -t model-train:default ./model-train
+docker build -t model-train:default /home/adminp/practica_gixpd-docker-k8s/model-train
+
+docker build -t model-server:default /home/adminp/practica_gixpd-docker-k8s/model-server
 ```
 
-Check that the image exists:
-
-```bash
-docker images
-```
-
-The training container receives the model destination through the `MODEL_PATH` environment variable.
-
-Create a directory for generated models:
-
-```bash
-mkdir -p models
-```
-
-Run the training container:
+Train the model:
 
 ```bash
 docker run --rm \
   -e MODEL_PATH=/models/model.npy \
-  -v "$(pwd)/models:/models" \
+  -v /home/adminp/practica_gixpd-docker-k8s/models:/models \
   model-train:default
 ```
 
-Expected output:
-
-```text
-Model trained successfully
-Model Score: 0.808...
-```
-
-The generated model should now exist at:
-
-```text
-models/model.npy
-```
-
----
-
-## 2.2 Build the model server image
-
-Build the Flask server:
-
-```bash
-docker build -t model-server:default ./model-server
-```
-
-Check both images:
-
-```bash
-docker images
-```
-
-The following images should exist:
-
-```text
-model-train:default
-model-server:default
-```
-
-Run the model server:
+Run the Flask server:
 
 ```bash
 docker run --rm \
   -e MODEL_PATH=/models/model.npy \
-  -v "$(pwd)/models:/models:ro \
+  -v /home/adminp/practica_gixpd-docker-k8s/models:/models:ro \
   -p 8000:8000 \
   model-server:default
 ```
 
-The model directory is mounted as read-only because the server only needs to read the trained model.
-
----
-
-## 2.3 Test the Docker application
-
-Keep the server container running and open another terminal.
-
-Test the documentation endpoint:
+Test the API:
 
 ```bash
 curl http://localhost:8000/
-```
 
-Test a model prediction:
-
-```bash
 curl "http://localhost:8000/model?minutes=5"
 ```
 
-Example response:
+Example prediction:
 
 ```json
 {"spent":22.879625918118677}
 ```
 
-`minutes=5` is a query parameter passed to the API.
-
-The server loads `model.npy` and uses the trained model to predict the amount spent for a customer who takes 5 minutes before making a purchase.
-
-At this point the complete local Docker flow is:
-
-```text
-model-train
-    |
-    v
-model.npy
-    |
-    v
-model-server
-    |
-    v
-Flask API
-    |
-    v
-/model?minutes=5
-```
-
 ---
 
-# 3. Kubernetes
+# Kubernetes
 
-## 3.1 Export the Docker images
-
-The Docker images are exported to `.tar` files before loading them into Minikube.
+The Docker images are exported and loaded into Minikube:
 
 ```bash
 docker save -o model-train.tar model-train:default
 docker save -o model-server.tar model-server:default
-```
 
-Check them:
-
-```bash
-ls -lh *.tar
-```
-
-The `.tar` files are ignored by Git.
-
----
-
-## 3.2 Start Minikube
-
-Our OpenNebula VM has limited RAM, so Minikube is configured to use 2200 MB:
-
-```bash
-minikube config set memory 2200
+minikube image load model-train.tar
+minikube image load model-server.tar
 ```
 
 Start the cluster:
@@ -252,492 +146,175 @@ Start the cluster:
 minikube start
 ```
 
-Check its status:
+Deploy the application:
 
 ```bash
-minikube status
+kubectl apply -f /home/adminp/practica_gixpd-docker-k8s/kubernetes/configmap.yaml
+
+kubectl apply -f /home/adminp/practica_gixpd-docker-k8s/kubernetes/pvc.yaml
+
+kubectl apply -f /home/adminp/practica_gixpd-docker-k8s/kubernetes/job.yaml
+
+kubectl apply -f /home/adminp/practica_gixpd-docker-k8s/kubernetes/deployment.yaml
+
+kubectl apply -f /home/adminp/practica_gixpd-docker-k8s/kubernetes/service.yaml
 ```
 
-Check the Kubernetes node:
-
-```bash
-kubectl get nodes
-```
-
-Expected status:
-
-```text
-minikube   Ready   control-plane
-```
-
----
-
-## 3.3 Load the images into Minikube
-
-```bash
-minikube image load model-train.tar
-minikube image load model-server.tar
-```
-
-Check that both images are available:
-
-```bash
-minikube image ls | grep "model-"
-```
-
-Expected images:
-
-```text
-docker.io/library/model-train:default
-docker.io/library/model-server:default
-```
-
----
-
-# 4. Kubernetes resources
-
-## 4.1 ConfigMap
-
-The ConfigMap stores:
-
-```text
-MODEL_PATH=/models/model.npy
-```
-
-Apply it:
-
-```bash
-kubectl apply -f kubernetes/configmap.yaml
-```
-
-Check it:
-
-```bash
-kubectl get configmaps
-kubectl describe configmap model-config
-```
-
-The ConfigMap stores configuration only. It does not contain the model itself.
-
----
-
-## 4.2 Persistent Volume
-
-The model is stored in a PersistentVolumeClaim named `model-pvc`.
-
-Apply it:
-
-```bash
-kubectl apply -f kubernetes/pvc.yaml
-```
-
-Check its state:
-
-```bash
-kubectl get pvc
-```
-
-Expected state:
-
-```text
-model-pvc   Bound
-```
-
-The PVC allows the model generated by the training Job to be read later by the model server Deployment.
-
----
-
-## 4.3 Training Job
-
-Apply the training Job:
-
-```bash
-kubectl apply -f kubernetes/job.yaml
-```
-
-Check its status:
+Check the deployment:
 
 ```bash
 kubectl get jobs
-kubectl get pods
-```
-
-The training Pod should transition from:
-
-```text
-Running
-```
-
-to:
-
-```text
-Completed
-```
-
-This is expected because a Kubernetes Job performs a task and terminates.
-
-Check the training logs:
-
-```bash
-kubectl logs job/model-train
-```
-
-Example output:
-
-```text
-Model trained successfully
-Model Score: 0.8086921460343587
-```
-
-The Job:
-
-- uses the `model-train:default` image;
-- receives `MODEL_PATH` from the ConfigMap;
-- mounts the persistent volume at `/models`;
-- trains the model;
-- writes `model.npy` to persistent storage;
-- defines CPU and memory requests and limits.
-
----
-
-## 4.4 Model Server Deployment
-
-Apply the Deployment:
-
-```bash
-kubectl apply -f kubernetes/deployment.yaml
-```
-
-Check it:
-
-```bash
 kubectl get deployments
 kubectl get pods
-```
-
-Expected Deployment state:
-
-```text
-model-server   3/3
-```
-
-Three server Pods should be running:
-
-```text
-model-server-...   1/1   Running
-model-server-...   1/1   Running
-model-server-...   1/1   Running
-```
-
-The Deployment:
-
-- runs 3 replicas of `model-server:default`;
-- obtains `MODEL_PATH` from the ConfigMap;
-- mounts the trained model as read-only;
-- defines CPU and memory requests and limits;
-- defines readiness and liveness probes.
-
-The readiness probe checks whether a Pod is ready to receive traffic.
-
-The liveness probe checks whether the application is still healthy and should continue running.
-
----
-
-## 4.5 Service
-
-The three model-server Pods are exposed through a Kubernetes Service.
-
-Apply it:
-
-```bash
-kubectl apply -f kubernetes/service.yaml
-```
-
-Check it:
-
-```bash
 kubectl get services
-kubectl describe service model-server
+kubectl get pvc
 ```
 
-The Service exposes port `5000` and forwards requests to port `8000` on the Flask containers:
+Expected result:
 
 ```text
-Service :5000
-     |
-     v
-Pod :8000
+Training Job        -> Complete
+Model PVC           -> Bound
+Server Deployment   -> 3/3 replicas
+Server Pods         -> Running
 ```
 
-The Service selector automatically finds Pods with:
-
-```text
-app=model-server
-```
-
----
-
-# 5. Accessing the API
-
-The Kubernetes Service uses `ClusterIP`, so it is accessible from inside the cluster.
-
-To access it from the VM, use port forwarding:
+Access the API:
 
 ```bash
 kubectl port-forward service/model-server 5000:5000
 ```
 
-Keep this terminal open.
-
-In another terminal, test the API.
-
-Documentation endpoint:
-
-```bash
-curl http://localhost:5000/
-```
-
-Prediction endpoint:
+Then, from another terminal:
 
 ```bash
 curl "http://localhost:5000/model?minutes=5"
 ```
 
-Example response:
+---
 
-```json
-{"spent":22.879625918118677}
+# Model variants
+
+In addition to the model provided for the practice, we created two alternative versions.
+
+## Polynomial V2
+
+The provided model uses polynomial regression of degree 4.
+
+The V2 version modifies the training process to use a polynomial of degree 2:
+
+```python
+mymodel = np.poly1d(np.polyfit(train_x, train_y, 2))
 ```
 
-Complete request flow:
+This allows us to retrain the application and demonstrate that changing the model produces different predictions.
+
+## Custom model — Decision Tree
+
+We also implemented a different machine learning model using:
+
+```python
+DecisionTreeRegressor
+```
+
+The custom model:
+
+- uses the same input data;
+- is trained independently from the provided polynomial model;
+- is serialized using `joblib`;
+- has its own training and Flask server Docker images;
+- is deployed independently in Kubernetes.
+
+The custom pipeline is:
 
 ```text
-curl
- |
- v
-localhost:5000
- |
- | port-forward
- v
-Kubernetes Service :5000
- |
- v
-one of the 3 model-server Pods :8000
- |
- v
-Flask
- |
- v
-model.npy
- |
- v
-JSON prediction
+model-train:custom
+        |
+        v
+DecisionTreeRegressor
+        |
+        v
+model-custom.joblib
+        |
+        v
+Kubernetes PVC
+        |
+        v
+model-server:custom
+        |
+        v
+Service
 ```
+
+For the same input:
+
+```text
+minutes = 5
+```
+
+the original polynomial model produces approximately:
+
+```text
+22.88
+```
+
+while the custom Decision Tree produces approximately:
+
+```text
+44
+```
+
+This demonstrates that the same Docker/Kubernetes infrastructure can be reused with a different machine learning model.
 
 ---
 
-# 6. Restarting the environment
+# Restarting the environment
 
-If the OpenNebula VM is stopped or restarted, it is normally not necessary to deploy everything again.
-
-Start the existing Minikube cluster:
+After restarting the OpenNebula VM:
 
 ```bash
 minikube start
 ```
 
-Check Minikube:
+Check that the resources are available:
 
 ```bash
-minikube status
-```
-
-Check the node:
-
-```bash
-kubectl get nodes
-```
-
-Check the Kubernetes resources:
-
-```bash
-kubectl get configmaps
-kubectl get pvc
-kubectl get jobs
-kubectl get deployments
 kubectl get pods
+kubectl get deployments
 kubectl get services
+kubectl get jobs
+kubectl get pvc
 ```
 
-Expected state:
+The Kubernetes resources are preserved by Minikube.
 
-```text
-model-config        available
-model-pvc           Bound
-model-train         Complete
-model-server        3/3
-model-server Pods   Running
-model-server        Service available
-```
-
-The Deployment automatically recreates/restarts its Pods when the Kubernetes cluster starts again.
-
-The port-forward is temporary and must be started again:
+The `port-forward` must be started again:
 
 ```bash
 kubectl port-forward service/model-server 5000:5000
 ```
 
-Then the API can be tested again:
-
-```bash
-curl http://localhost:5000/
-curl "http://localhost:5000/model?minutes=5"
-```
-
----
-
-## Re-running the training Job
-
-A completed Job does not run again automatically.
-
-To train the model again:
-
-```bash
-kubectl delete job model-train
-```
-
-Then recreate it:
-
-```bash
-kubectl apply -f kubernetes/job.yaml
-```
-
-Check the new execution:
-
-```bash
-kubectl get pods
-kubectl logs job/model-train
-```
-
----
-
-## Stopping Minikube
-
-To stop the cluster without deleting it:
+Use:
 
 ```bash
 minikube stop
 ```
 
-It can later be restored using:
-
-```bash
-minikube start
-```
-
-Avoid using:
-
-```bash
-minikube delete
-```
-
-unless the intention is to completely delete the Kubernetes cluster and recreate it from scratch.
+to stop the cluster without deleting it.
 
 ---
 
-# 7. Useful commands
+# Repository
 
-```bash
-# Minikube
-minikube start
-minikube stop
-minikube status
+The repository keeps the complete evolution of the practice through Git commits, including:
 
-# General Kubernetes status
-kubectl get nodes
-kubectl get pods
-kubectl get deployments
-kubectl get jobs
-kubectl get services
-kubectl get configmaps
-kubectl get pvc
+- Dockerization of the training application;
+- Dockerization of the Flask server;
+- Kubernetes configuration;
+- persistent storage and training Job;
+- 3-replica server Deployment;
+- Service and API access;
+- modified polynomial model;
+- custom Decision Tree model.
 
-# Detailed information
-kubectl describe configmap model-config
-kubectl describe pvc model-pvc
-kubectl describe job model-train
-kubectl describe deployment model-server
-kubectl describe service model-server
-
-# Logs
-kubectl logs job/model-train
-kubectl logs deployment/model-server
-
-# API access
-kubectl port-forward service/model-server 5000:5000
-```
-
----
-
-# 8. Troubleshooting
-
-## Minikube cannot connect
-
-If commands such as:
-
-```bash
-kubectl get pods
-```
-
-return an error similar to:
-
-```text
-connect: no route to host
-```
-
-check Minikube:
-
-```bash
-minikube status
-```
-
-If it is stopped:
-
-```bash
-minikube start
-```
-
----
-
-## Minikube requests too much memory
-
-Our VM originally failed with:
-
-```text
-Docker has only 3394MB memory but you specified 9001MB
-```
-
-The configured memory was reduced to:
-
-```bash
-minikube config set memory 2200
-```
-
-After that Minikube started correctly.
-
----
-
-# 9. Possible extensions
-
-The basic Docker and Kubernetes deployment is complete.
-
-Possible improvements for the final version include:
-
-- replacing the provided model with our own machine learning model;
-- modifying the training model and demonstrating that executing the Kubernetes Job changes the predictions returned by the API;
-- improving the API validation and error handling;
-- improving the project documentation;
-- maintaining a clear Git commit history showing the evolution of the project.
-
-These extensions can be used to demonstrate a deeper understanding of the complete training and deployment pipeline.
+The generated models and Docker image exports are excluded from Git.
